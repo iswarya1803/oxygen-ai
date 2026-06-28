@@ -40,7 +40,9 @@ const dbWrapper = {
             console.error('MySQL connection failed and sqlite3 is unavailable. Ensure DB credentials are correct.');
             return callback(new Error('No database available'));
           }
-          const dbPath = process.env.VERCEL ? '/tmp/database.sqlite' : path.resolve(__dirname, 'database.sqlite');
+          const dbPath = process.env.RENDER_DISK_PATH 
+            ? path.join(process.env.RENDER_DISK_PATH, 'database.sqlite')
+            : (process.env.VERCEL ? '/tmp/database.sqlite' : path.resolve(__dirname, 'database.sqlite'));
           db = new sqlite3.Database(dbPath);
           dbWrapper.activeEngine = 'sqlite';
           

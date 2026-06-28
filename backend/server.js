@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const { db } = require('./db');
 const { GoogleGenAI } = require('@google/genai');
 
@@ -302,7 +303,22 @@ app.get('/api/analytics', checkDBConnection, (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+
+// Serve frontend static files if running in production or on Render
+if (process.env.NODE_ENV === 'production' || process.env.RENDER) {
+  const frontendDistPath = path.join(__dirname, '../frontend/dist');
+  app.use(express.static(frontendDistPath));
+  
+  app.get('*', (req, res) => {
+    // Only intercept non-API routes
+    if (!req.path.startsWith('/api/')) {
+      res.sendFile(path.join(frontendDistPath, 'index.html'));
+    }
+  });
+}
+
+// Don't listen if running as a Vercel serverless function
+if (!process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });

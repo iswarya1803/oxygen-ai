@@ -30,7 +30,7 @@ const dbWrapper = {
         
         // Initialize SQLite if not already done
         if (!db) {
-          const dbPath = path.resolve(__dirname, 'database.sqlite');
+          const dbPath = process.env.VERCEL ? '/tmp/database.sqlite' : path.resolve(__dirname, 'database.sqlite');
           db = new sqlite3.Database(dbPath);
           dbWrapper.activeEngine = 'sqlite';
           

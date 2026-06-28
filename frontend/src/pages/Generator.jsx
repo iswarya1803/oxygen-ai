@@ -18,7 +18,7 @@ function Generator() {
   const [rating, setRating] = useState(0);
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
 
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+  const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '' : 'http://localhost:5000');
 
   // Auto-hide toast
   useEffect(() => {
@@ -174,7 +174,7 @@ function Generator() {
       )}
 
       {/* Input Section */}
-      <div className="card glass-panel" style={{ alignSelf: 'start', position: 'sticky', top: '100px' }}>
+      <div className="card glass-panel hide-scrollbar" style={{ alignSelf: 'start', position: 'sticky', top: '100px', maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }}>
         <h2 className="mb-6 flex items-center gap-2">
           <Zap className="text-secondary" /> AI Workspace
         </h2>

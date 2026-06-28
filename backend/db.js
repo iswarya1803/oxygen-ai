@@ -1,5 +1,10 @@
 const mysql = require('mysql2');
-const sqlite3 = require('sqlite3').verbose();
+let sqlite3;
+try {
+  sqlite3 = require('sqlite3').verbose();
+} catch (e) {
+  console.warn('sqlite3 module not found. SQLite fallback will be disabled.');
+}
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
@@ -30,6 +35,10 @@ const dbWrapper = {
         
         // Initialize SQLite if not already done
         if (!db) {
+          if (!sqlite3) {
+            console.error('MySQL connection failed and sqlite3 is unavailable. Ensure DB credentials are correct.');
+            return callback(new Error('No database available'));
+          }
           const dbPath = process.env.VERCEL ? '/tmp/database.sqlite' : path.resolve(__dirname, 'database.sqlite');
           db = new sqlite3.Database(dbPath);
           dbWrapper.activeEngine = 'sqlite';

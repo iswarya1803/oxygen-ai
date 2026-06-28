@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const { db } = require('./db');
+const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenAI } = require('@google/genai');
 
 const app = express();
@@ -18,6 +18,14 @@ app.get('/', (req, res) => {
   });
 });
 
+// Initialize Supabase Client
+let supabase;
+if (process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
+  supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+} else {
+  console.warn('Supabase credentials missing. Operating in memory-only mode.');
+}
+
 // Initialize AI Client
 let ai;
 try {
@@ -30,16 +38,8 @@ try {
 
 // Middleware to check if DB is connected
 const checkDBConnection = (req, res, next) => {
-  db.getConnection((err, connection) => {
-    if (err) {
-      console.warn('Database connection failed, operating in memory-only mode.');
-      req.dbConnected = false;
-    } else {
-      req.dbConnected = true;
-      connection.release();
-    }
-    next();
-  });
+  req.dbConnected = !!supabase;
+  next();
 };
 
 app.post('/api/generate', checkDBConnection, async (req, res) => {
@@ -98,109 +98,117 @@ Format the output cleanly using Markdown, with clear headings for WhatsApp, Inst
       });
     }
 
-    const query = `
-      INSERT INTO generations 
-      (primary_subject, specific_requirements, constraints, preferences, structured_prompt, ai_response, rating) 
-      VALUES (?, ?, ?, ?, ?, ?, NULL)
-    `;
-    
-    db.query(
-      query, 
-      [primarySubject, requirements || null, constraints || null, preferences || null, structuredPrompt, aiResponse],
-      (err, result) => {
-        if (err) {
-          console.error('Error saving to database:', err);
-          return res.status(500).json({ error: 'Failed to save generation to database.' });
-        }
-        
-        return res.json({
-          id: result.insertId,
+    const { data, error } = await supabase
+      .from('generations')
+      .insert([
+        {
+          primary_subject: primarySubject,
+          specific_requirements: requirements || null,
+          constraints: constraints || null,
+          preferences: preferences || null,
+          structured_prompt: structuredPrompt,
           ai_response: aiResponse
-        });
-      }
-    );
+        }
+      ])
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error saving to database:', error);
+      return res.status(500).json({ error: 'Failed to save generation to database.' });
+    }
+    
+    return res.json({
+      id: data.id,
+      ai_response: aiResponse
+    });
   } catch (error) {
     console.error('Unhandled error generating content:', error);
     res.status(500).json({ error: 'Internal server error while generating content.' });
   }
 });
 
-app.get('/api/history', checkDBConnection, (req, res) => {
-  if (!req.dbConnected) {
-    return res.json([]);
+app.get('/api/history', checkDBConnection, async (req, res) => {
+  if (!req.dbConnected) return res.json([]);
+  
+  const { data, error } = await supabase
+    .from('generations')
+    .select('*')
+    .order('created_at', { ascending: false });
+    
+  if (error) {
+    console.error('Error fetching history:', error);
+    return res.status(500).json({ error: 'Database query failed' });
   }
-  const query = 'SELECT * FROM generations ORDER BY created_at DESC';
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error('Error fetching history:', err);
-      return res.status(500).json({ error: 'Database query failed' });
-    }
-    res.json(results);
-  });
+  res.json(data);
 });
 
-app.get('/api/history/:id', checkDBConnection, (req, res) => {
+app.get('/api/history/:id', checkDBConnection, async (req, res) => {
   if (!req.dbConnected) return res.status(404).json({ error: 'Not found' });
-  const query = 'SELECT * FROM generations WHERE id = ?';
-  db.query(query, [req.params.id], (err, results) => {
-    if (err) {
-      console.error('Error fetching generation:', err);
-      return res.status(500).json({ error: 'Database query failed' });
-    }
-    if (results.length === 0) return res.status(404).json({ error: 'Not found' });
-    res.json(results[0]);
-  });
+  
+  const { data, error } = await supabase
+    .from('generations')
+    .select('*')
+    .eq('id', req.params.id)
+    .single();
+    
+  if (error || !data) {
+    console.error('Error fetching generation:', error);
+    return res.status(404).json({ error: 'Not found' });
+  }
+  res.json(data);
 });
 
-app.post('/api/rating', checkDBConnection, (req, res) => {
+app.post('/api/rating', checkDBConnection, async (req, res) => {
   const { id, rating } = req.body;
   if (!id || rating === undefined) {
     return res.status(400).json({ error: 'ID and rating are required' });
   }
+  if (!req.dbConnected) return res.json({ success: true });
+
+  const { error } = await supabase
+    .from('generations')
+    .update({ rating })
+    .eq('id', id);
+    
+  if (error) {
+    console.error('Error updating rating:', error);
+    return res.status(500).json({ error: 'Failed to update rating in database' });
+  }
+  res.json({ success: true });
+});
+
+app.post('/api/copy', checkDBConnection, async (req, res) => {
+  const { id } = req.body;
+  if (!id) return res.status(400).json({ error: 'id is required' });
+  if (!req.dbConnected) return res.json({ success: true });
   
-  if (!req.dbConnected) return res.json({ success: true });
-
-  const query = 'UPDATE generations SET rating = ? WHERE id = ?';
-  db.query(query, [rating, id], (err, result) => {
-    if (err) {
-      console.error('Error updating rating:', err);
-      return res.status(500).json({ error: 'Failed to update rating in database' });
-    }
-    res.json({ success: true });
-  });
+  const { error } = await supabase.from('actions').insert([{ generation_id: id, action_type: 'copy' }]);
+  if (error) return res.status(500).json({ error: 'Failed' });
+  res.json({ success: true });
 });
 
-app.post('/api/copy', checkDBConnection, (req, res) => {
+app.post('/api/download', checkDBConnection, async (req, res) => {
   const { id } = req.body;
   if (!id) return res.status(400).json({ error: 'id is required' });
   if (!req.dbConnected) return res.json({ success: true });
-  db.query('INSERT INTO actions (generation_id, action_type) VALUES (?, ?)', [id, 'copy'], (err) => {
-    if (err) return res.status(500).json({ error: 'Failed' });
-    res.json({ success: true });
-  });
+  
+  const { error } = await supabase.from('actions').insert([{ generation_id: id, action_type: 'download' }]);
+  if (error) return res.status(500).json({ error: 'Failed' });
+  res.json({ success: true });
 });
 
-app.post('/api/download', checkDBConnection, (req, res) => {
+app.post('/api/export', checkDBConnection, async (req, res) => {
   const { id } = req.body;
   if (!id) return res.status(400).json({ error: 'id is required' });
   if (!req.dbConnected) return res.json({ success: true });
-  db.query('INSERT INTO actions (generation_id, action_type) VALUES (?, ?)', [id, 'download'], (err) => {
-    if (err) return res.status(500).json({ error: 'Failed' });
-    res.json({ success: true });
-  });
+  
+  const { error } = await supabase.from('actions').insert([{ generation_id: id, action_type: 'export' }]);
+  if (error) return res.status(500).json({ error: 'Failed' });
+  res.json({ success: true });
 });
 
-app.post('/api/export', checkDBConnection, (req, res) => {
-  const { id } = req.body;
-  if (!id) return res.status(400).json({ error: 'id is required' });
-  if (!req.dbConnected) return res.json({ success: true });
-  db.query('INSERT INTO actions (generation_id, action_type) VALUES (?, ?)', [id, 'export'], (err) => {
-    if (err) return res.status(500).json({ error: 'Failed' });
-    res.json({ success: true });
-  });
-});
-
-app.get('/api/analytics', checkDBConnection, (req, res) => {
+app.get('/api/analytics', checkDBConnection, async (req, res) => {
   if (!req.dbConnected) {
     return res.json({
       totalGenerations: 0,
@@ -225,81 +233,80 @@ app.get('/api/analytics', checkDBConnection, (req, res) => {
     ratingDistribution: []
   };
 
-  const queries = {
-    totals: `
-      SELECT 
-        COUNT(*) as total,
-        AVG(rating) as avg_rating,
-        COUNT(CASE WHEN rating >= 4 THEN 1 END) as high_quality
-      FROM generations
-    `,
-    actions: `
-      SELECT action_type, COUNT(*) as count 
-      FROM actions 
-      GROUP BY action_type
-    `,
-    trends: `
-      SELECT DATE(created_at) as date, COUNT(*) as count 
-      FROM generations 
-      GROUP BY DATE(created_at) 
-      ORDER BY DATE(created_at) DESC 
-      LIMIT 7
-    `,
-    ratings: `
-      SELECT rating, COUNT(*) as count 
-      FROM generations 
-      WHERE rating IS NOT NULL 
-      GROUP BY rating
-    `
-  };
+  try {
+    const [genRes, actionsRes] = await Promise.all([
+      supabase.from('generations').select('id, rating, created_at').order('created_at', { ascending: true }),
+      supabase.from('actions').select('action_type')
+    ]);
 
-  db.query(queries.totals, (err, totalRes) => {
-    if (err) return res.status(500).json({ error: 'Database error fetching totals' });
+    if (genRes.error) throw genRes.error;
+    if (actionsRes.error) throw actionsRes.error;
+
+    const generations = genRes.data || [];
+    const actions = actionsRes.data || [];
+
+    // Totals
+    analyticsData.totalGenerations = generations.length;
+    let highQualityCount = 0;
+    let totalRatingSum = 0;
+    let ratedCount = 0;
+
+    let stars5 = 0, stars4 = 0, stars3 = 0, stars12 = 0;
+    const trendsMap = {};
+
+    generations.forEach(g => {
+      // Trends grouping by date
+      const date = new Date(g.created_at).toISOString().split('T')[0];
+      trendsMap[date] = (trendsMap[date] || 0) + 1;
+
+      // Ratings
+      if (g.rating !== null && g.rating !== undefined) {
+        totalRatingSum += g.rating;
+        ratedCount++;
+        if (g.rating >= 4) highQualityCount++;
+
+        if (g.rating === 5) stars5++;
+        else if (g.rating === 4) stars4++;
+        else if (g.rating === 3) stars3++;
+        else if (g.rating <= 2) stars12++;
+      }
+    });
+
+    if (ratedCount > 0) {
+      analyticsData.averageRating = (totalRatingSum / ratedCount).toFixed(1);
+    }
     
-    analyticsData.totalGenerations = totalRes[0].total;
-    analyticsData.averageRating = totalRes[0].avg_rating ? parseFloat(totalRes[0].avg_rating).toFixed(1) : 0;
     analyticsData.qualityScore = analyticsData.totalGenerations > 0 
-      ? Math.round((totalRes[0].high_quality / analyticsData.totalGenerations) * 100) 
+      ? Math.round((highQualityCount / analyticsData.totalGenerations) * 100) 
       : 0;
 
-    db.query(queries.actions, (err, actionRes) => {
-      if (err) return res.status(500).json({ error: 'Database error fetching actions' });
-      
-      actionRes.forEach(row => {
-        if (row.action_type === 'copy') analyticsData.copyCount = row.count;
-        if (row.action_type === 'download') analyticsData.downloadCount = row.count;
-        if (row.action_type === 'export') analyticsData.exportCount = row.count;
-      });
+    if (stars5 || stars4 || stars3 || stars12) {
+      analyticsData.ratingDistribution = [
+        { name: '5 Stars', value: stars5 },
+        { name: '4 Stars', value: stars4 },
+        { name: '3 Stars', value: stars3 },
+        { name: '1-2 Stars', value: stars12 }
+      ];
+    }
 
-      db.query(queries.trends, (err, trendRes) => {
-        if (err) return res.status(500).json({ error: 'Database error fetching trends' });
-        analyticsData.trends = trendRes.reverse(); // oldest first for charts
+    // Trends Array (limit to last 7 days)
+    analyticsData.trends = Object.keys(trendsMap).map(date => ({
+      date,
+      count: trendsMap[date]
+    })).slice(-7);
 
-        db.query(queries.ratings, (err, ratingRes) => {
-          if (err) return res.status(500).json({ error: 'Database error fetching ratings' });
-          
-          let stars5 = 0, stars4 = 0, stars3 = 0, stars12 = 0;
-          ratingRes.forEach(r => {
-            if (r.rating === 5) stars5 = r.count;
-            else if (r.rating === 4) stars4 = r.count;
-            else if (r.rating === 3) stars3 = r.count;
-            else if (r.rating <= 2) stars12 += r.count;
-          });
-
-          if (stars5 || stars4 || stars3 || stars12) {
-            analyticsData.ratingDistribution = [
-              { name: '5 Stars', value: stars5 },
-              { name: '4 Stars', value: stars4 },
-              { name: '3 Stars', value: stars3 },
-              { name: '1-2 Stars', value: stars12 }
-            ];
-          }
-
-          res.json(analyticsData);
-        });
-      });
+    // Actions
+    actions.forEach(a => {
+      if (a.action_type === 'copy') analyticsData.copyCount++;
+      if (a.action_type === 'download') analyticsData.downloadCount++;
+      if (a.action_type === 'export') analyticsData.exportCount++;
     });
-  });
+
+    res.json(analyticsData);
+  } catch (err) {
+    console.error('Error calculating analytics:', err);
+    res.status(500).json({ error: 'Failed to calculate analytics' });
+  }
 });
 
 const PORT = process.env.PORT || 5000;

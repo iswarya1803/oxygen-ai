@@ -18,7 +18,7 @@ function Generator() {
   const [rating, setRating] = useState(0);
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
 
-  const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '' : 'http://localhost:5000');
+  const API_URL = import.meta.env.PROD ? '' : 'http://localhost:5000';
 
   // Auto-hide toast
   useEffect(() => {

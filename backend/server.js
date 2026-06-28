@@ -31,10 +31,12 @@ try {
 const checkDBConnection = (req, res, next) => {
   db.getConnection((err, connection) => {
     if (err) {
-      console.error('Database connection failed:', err);
-      return res.status(503).json({ error: 'Database not connected. Please check your MySQL server and .env configuration.' });
+      console.warn('Database connection failed, operating in memory-only mode.');
+      req.dbConnected = false;
+    } else {
+      req.dbConnected = true;
+      connection.release();
     }
-    connection.release();
     next();
   });
 };
@@ -82,6 +84,19 @@ Format the output cleanly using Markdown, with clear headings for WhatsApp, Inst
     }
 
     // Save to Database
+    if (!req.dbConnected) {
+      return res.json({
+        id: Date.now(),
+        primary_subject: primarySubject,
+        specific_requirements: requirements,
+        constraints: constraints,
+        preferences: preferences,
+        structured_prompt: structuredPrompt,
+        ai_response: aiResponse,
+        created_at: new Date()
+      });
+    }
+
     const query = `
       INSERT INTO generations 
       (primary_subject, specific_requirements, constraints, preferences, structured_prompt, ai_response, rating) 
@@ -110,6 +125,9 @@ Format the output cleanly using Markdown, with clear headings for WhatsApp, Inst
 });
 
 app.get('/api/history', checkDBConnection, (req, res) => {
+  if (!req.dbConnected) {
+    return res.json([]);
+  }
   const query = 'SELECT * FROM generations ORDER BY created_at DESC';
   db.query(query, (err, results) => {
     if (err) {
@@ -121,6 +139,7 @@ app.get('/api/history', checkDBConnection, (req, res) => {
 });
 
 app.get('/api/history/:id', checkDBConnection, (req, res) => {
+  if (!req.dbConnected) return res.status(404).json({ error: 'Not found' });
   const query = 'SELECT * FROM generations WHERE id = ?';
   db.query(query, [req.params.id], (err, results) => {
     if (err) {
@@ -138,6 +157,8 @@ app.post('/api/rating', checkDBConnection, (req, res) => {
     return res.status(400).json({ error: 'ID and rating are required' });
   }
   
+  if (!req.dbConnected) return res.json({ success: true });
+
   const query = 'UPDATE generations SET rating = ? WHERE id = ?';
   db.query(query, [rating, id], (err, result) => {
     if (err) {
@@ -151,6 +172,7 @@ app.post('/api/rating', checkDBConnection, (req, res) => {
 app.post('/api/copy', checkDBConnection, (req, res) => {
   const { id } = req.body;
   if (!id) return res.status(400).json({ error: 'id is required' });
+  if (!req.dbConnected) return res.json({ success: true });
   db.query('INSERT INTO actions (generation_id, action_type) VALUES (?, ?)', [id, 'copy'], (err) => {
     if (err) return res.status(500).json({ error: 'Failed' });
     res.json({ success: true });
@@ -160,6 +182,7 @@ app.post('/api/copy', checkDBConnection, (req, res) => {
 app.post('/api/download', checkDBConnection, (req, res) => {
   const { id } = req.body;
   if (!id) return res.status(400).json({ error: 'id is required' });
+  if (!req.dbConnected) return res.json({ success: true });
   db.query('INSERT INTO actions (generation_id, action_type) VALUES (?, ?)', [id, 'download'], (err) => {
     if (err) return res.status(500).json({ error: 'Failed' });
     res.json({ success: true });
@@ -169,6 +192,7 @@ app.post('/api/download', checkDBConnection, (req, res) => {
 app.post('/api/export', checkDBConnection, (req, res) => {
   const { id } = req.body;
   if (!id) return res.status(400).json({ error: 'id is required' });
+  if (!req.dbConnected) return res.json({ success: true });
   db.query('INSERT INTO actions (generation_id, action_type) VALUES (?, ?)', [id, 'export'], (err) => {
     if (err) return res.status(500).json({ error: 'Failed' });
     res.json({ success: true });
@@ -176,6 +200,19 @@ app.post('/api/export', checkDBConnection, (req, res) => {
 });
 
 app.get('/api/analytics', checkDBConnection, (req, res) => {
+  if (!req.dbConnected) {
+    return res.json({
+      totalGenerations: 0,
+      averageRating: '0.0',
+      qualityScore: 0,
+      copyCount: 0,
+      downloadCount: 0,
+      exportCount: 0,
+      trends: [],
+      ratingDistribution: []
+    });
+  }
+
   const analyticsData = {
     totalGenerations: 0,
     averageRating: 0,

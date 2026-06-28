@@ -349,7 +349,7 @@ function Generator() {
             </div>
           ) : (
             <div className="mt-4 animate-fade-in">
-              <p className="text-muted mb-8 text-center text-lg">Ensure MySQL is running and your API key is in .env before generating.</p>
+              <p className="text-muted mb-8 text-center text-lg">Connected to Supabase and ready to generate.</p>
               
               <div className="grid gap-6">
                 <div className="card bg-black bg-opacity-20 border border-white border-opacity-5 relative overflow-hidden">

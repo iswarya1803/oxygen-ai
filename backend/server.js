@@ -20,10 +20,16 @@ app.get('/', (req, res) => {
 
 // Initialize Supabase Client
 let supabase;
-if (process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
-  supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-} else {
-  console.warn('Supabase credentials missing. Operating in memory-only mode.');
+try {
+  if (process.env.SUPABASE_URL && process.env.SUPABASE_KEY) {
+    const url = process.env.SUPABASE_URL.trim();
+    const key = process.env.SUPABASE_KEY.trim();
+    supabase = createClient(url, key);
+  } else {
+    console.warn('Supabase credentials missing. Operating in memory-only mode.');
+  }
+} catch (err) {
+  console.error('Failed to initialize Supabase. Check URL format:', err);
 }
 
 // Initialize AI Client
